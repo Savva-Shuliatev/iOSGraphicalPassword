@@ -6,9 +6,8 @@
 
 import SwiftUI
 
-@MainActor
-public enum GraphicalPasswordState {
-  case def
+public enum GraphicalPasswordState: Sendable {
+  case initial
   case drawing
   case drawn
   case success
@@ -17,75 +16,56 @@ public enum GraphicalPasswordState {
 
 @MainActor
 public struct GraphicalPasswordView: View {
+  public static let spaceName = "GraphicalPasswordView.spaceName"
 
-  @Binding var state: GraphicalPasswordState
+  @Binding private var state: GraphicalPasswordState
+
+  @State var onDrawEndedActions: [(String) -> Void] = []
 
   @State private var gestureLocation: CGPoint?
+  @State private var points: [CGPoint] = Array(repeating: .zero, count: 9)
+  @State private var scalePoints: [Int] = []
+  @State private var selectedPoints: [Int] = []
+
+  internal var pointColor: Color = .black
+  internal var lineColor: Color = .blue
+  internal var selectedPointColor: Color = .blue
+  internal var successPointColor: Color = .green
+  internal var successLineColor: Color = .green
+  internal var errorPointColor: Color = .red
+  internal var errorLineColor: Color = .red
+  internal var pointRadius: CGFloat = 12
+  internal var lineWidth: CGFloat = 1
+  internal var scaleEffectForSelectedPoint: CGFloat = 2
+
+  private let values = [[0, 1, 2], [3, 4, 5], [6, 7, 8]]
 
   public var body: some View {
     ZStack {
       circles
-
-      Path { path in
-        guard self.selectedPoints.first != nil else { return }
-        path.move(to: self.points[self.selectedPoints[0]].center)
-
-        self.selectedPoints.forEach { selectedPoint in
-          path.addLine(to: self.points[selectedPoint].center)
-        }
-
-        if let gestureLocation {
-          path.addLine(to: gestureLocation)
-        }
-
-      }
-      .stroke(
-        self.color(for: 0, isLine: true),
-        style: StrokeStyle(
-          lineWidth: 1,
-          lineCap: .round,
-          lineJoin: .round
-        )
-      )
+      path
     }
     .coordinateSpace(name: Self.spaceName)
     .gesture(
       DragGesture(coordinateSpace: .named(Self.spaceName))
         .onChanged { value in
-          //guard self.success == nil else { return }
+          state = .drawing
           self.gestureLocation = value.location
 
           for (index, rect) in self.points.enumerated() {
-            let bindArea: CGRect
+            if isGestureLocationInsidePoint(
+              center: rect,
+              radius: pointRadius,
+              point: value.location
+            ), !selectedPoints.contains(index) {
+              selectedPoints.append(index)
 
-            if self.selectedPoints.first == nil {
-              bindArea = CGRect(
-                x: rect.minX - 35,
-                y: rect.minY - 35,
-                width: rect.width + 70,
-                height: rect.height + 70
-              )
+              withAnimation(.linear(duration: 0.2)) {
+                scalePoints.append(index)
 
-            } else {
-              bindArea = CGRect(
-                x: rect.minX - 22,
-                y: rect.minY - 22,
-                width: rect.width + 44,
-                height: rect.height + 44
-              )
-            }
-
-            if bindArea.contains(value.location) {
-              if !selectedPoints.contains(index) {
-                selectedPoints.append(index)
-
-                withAnimation(.linear(duration: 0.2)) {
-                  scalePoints.append(index)
-
-                  DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                    withAnimation(.linear(duration: 0.2)) {
-                      scalePoints.removeAll { $0 == index }
-                    }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                  withAnimation(.linear(duration: 0.2)) {
+                    scalePoints.removeAll { $0 == index }
                   }
                 }
               }
@@ -93,44 +73,53 @@ public struct GraphicalPasswordView: View {
           }
         }
         .onEnded { _ in
-          if selectedPoints.first != nil {}
+          state = .drawn
           gestureLocation = nil
+
+          if selectedPoints.first != nil {
+            let password = selectedPoints.map { "\($0)" }.reduce("", +)
+            onDrawEndedActions.forEach { action in
+              action(password)
+            }
+          }
         }
     )
-  }
+    .onChange(of: state) { state in
+      switch state {
+      case .initial:
+        gestureLocation = nil
+        selectedPoints = []
 
-  @State private var points: [CGRect] = Array(repeating: .zero, count: 9)
-  @State private var scalePoints: [Int] = []
-  private let values = [[0, 1, 2], [3, 4, 5], [6, 7, 8]]
-  @State private var selectedPoints: [Int] = []
+      case .drawing:
+        break
 
-  
-  private func color(for point: Int, isLine: Bool = false) -> Color {
-    if true {
-      return true ? Color.green : Color.red
+      case .drawn:
+        break
+
+      case .success:
+        break
+
+      case .error:
+        break
+      }
     }
-
-    if self.selectedPoints.contains(point) || isLine {
-      return Color.blue
-    }
-
-    return Color.gray
   }
 
   @ViewBuilder
   private var circles: some View {
-    GeometryReader { geometry in
+    GeometryReader { geometryProxy in
       VStack(spacing: 0) {
-        Color.red
-        VStack(spacing: 0) {
-          ForEach(0..<3) { row in
-            HStack(spacing: 0) {
-              ForEach(0..<3) { column in
-                Rectangle()
-                  .fill((column % 2 == 1 && row % 2 == 0) ? Color.red : Color.blue)
-                  .overlay(point(row: row, column: column))
-                  .frame(width: geometry.size.width / 3, height: geometry.size.width / 3)
-              }
+        Spacer()
+        ForEach(0..<3) { row in
+          HStack(spacing: 0) {
+            ForEach(0..<3) { column in
+              Rectangle()
+                .fill(Color.clear)
+                .overlay(point(row: row, column: column))
+                .frame(
+                  width: geometryProxy.size.width / 3,
+                  height: geometryProxy.size.width / 3
+                )
             }
           }
         }
@@ -138,34 +127,118 @@ public struct GraphicalPasswordView: View {
     }
   }
 
-  @ViewBuilder 
-  private func point(row: Int, column: Int) -> some View {
-    GeometryReader { circleGeometry in
-      Circle()
-        .fill(color(for: values[row][column]))
-        .onAppear {
-          let frame = circleGeometry.frame(in: .named(Self.spaceName))
-          points[values[row][column]] = frame
-        }
-        .onChange(
-          of: circleGeometry.frame(in: .named(Self.spaceName))
-        ) { frame in
-          points[values[row][column]] = frame
-        }
-    }
-    .frame(width: 12, height: 12)
-    .scaleEffect(scalePoints.contains(values[row][column]) ? 2 : 1)
-  }
+  @ViewBuilder
+  private var path: some View {
+    Path { path in
+      guard self.selectedPoints.first != nil else { return }
+      path.move(to: self.points[self.selectedPoints[0]])
 
-  public static let spaceName = "GraphicalPasswordView.spaceName"
+      self.selectedPoints.forEach { selectedPoint in
+        path.addLine(to: self.points[selectedPoint])
+      }
+
+      if let gestureLocation {
+        path.addLine(to: gestureLocation)
+      }
+
+    }
+    .stroke(
+      strokeColor(),
+      style: StrokeStyle(
+        lineWidth: lineWidth,
+        lineCap: .round,
+        lineJoin: .round
+      )
+    )
+  }
 
   public init(
     state: Binding<GraphicalPasswordState>
   ) {
     self._state = state
   }
+
+  private func pointColor(_ point: Int) -> Color {
+    switch state {
+    case .initial, .drawing, .drawn:
+      if selectedPoints.contains(point) {
+        return selectedPointColor
+      } else {
+        return pointColor
+      }
+
+    case .success:
+      return successPointColor
+
+    case .error:
+      return errorPointColor
+    }
+  }
+
+  private func strokeColor() -> Color {
+    switch state {
+    case .initial, .drawing, .drawn:
+      return lineColor
+
+    case .success:
+      return successLineColor
+
+    case .error:
+      return errorLineColor
+    }
+  }
+
+  @ViewBuilder
+  private func point(row: Int, column: Int) -> some View {
+    GeometryReader { geometryProxy in
+      Circle()
+        .fill(pointColor(values[row][column]))
+        .onAppear {
+          let frame = geometryProxy.frame(in: .named(Self.spaceName))
+          points[values[row][column]] = frame.center
+        }
+        .onChange(
+          of: geometryProxy.frame(in: .named(Self.spaceName))
+        ) { frame in
+          points[values[row][column]] = frame.center
+        }
+    }
+    .frame(width: pointRadius, height: pointRadius)
+    .scaleEffect(scalePoints.contains(values[row][column]) ? scaleEffectForSelectedPoint : 1)
+  }
+
+  private func isGestureLocationInsidePoint(center: CGPoint, radius: CGFloat, point: CGPoint) -> Bool {
+    let distance = sqrt(pow(point.x - center.x, 2) + pow(point.y - center.y, 2))
+    return distance <= radius
+  }
 }
 
 #Preview {
-  GraphicalPasswordView(state: .constant(.drawing))
+  TestView()
+}
+
+struct TestView: View {
+
+  @State private var graphicalPasswordState: GraphicalPasswordState = .initial
+
+  var body: some View {
+    NavigationView {
+      GeometryReader { reader in
+        GraphicalPasswordView(state: $graphicalPasswordState)
+          .onDrawEnded { password in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+              if password == "123654789" {
+                graphicalPasswordState = .success
+              } else {
+                graphicalPasswordState = .error
+              }
+            }
+          }
+          .padding(.horizontal, 32)
+          .padding(.bottom, 32 - reader.safeAreaInsets.bottom)
+          .navigationTitle("Graphical password")
+          .navigationBarTitleDisplayMode(.inline)
+      }
+    }
+  }
 }
